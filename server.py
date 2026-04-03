@@ -111,10 +111,23 @@ def build_config_from_env() -> dict:
 
 class HealthHandler(BaseHTTPRequestHandler):
     """Minimal HTTP handler for Koyeb health checks + bot status."""
-    
+
     bot_instance = None  # Set by main thread
     start_time = time.time()
-    
+    _cache: dict = {}
+    _CACHE_TTL = 10  # seconds
+
+    @classmethod
+    def _get_cached(cls, key):
+        entry = cls._cache.get(key)
+        if entry and (time.time() - entry[0]) < cls._CACHE_TTL:
+            return entry[1]
+        return None
+
+    @classmethod
+    def _set_cached(cls, key, data):
+        cls._cache[key] = (time.time(), data)
+
     def do_GET(self):
         if self.path == "/":
             self._respond_index()
@@ -122,6 +135,10 @@ class HealthHandler(BaseHTTPRequestHandler):
             self._respond_health()
         elif self.path == "/status":
             self._respond_status()
+        elif self.path.startswith("/candles"):
+            self._respond_candles()
+        elif self.path == "/conditions":
+            self._respond_conditions()
         else:
             self.send_error(404)
 
@@ -226,6 +243,188 @@ class HealthHandler(BaseHTTPRequestHandler):
         }
         self.wfile.write(json.dumps(status, indent=2).encode())
     
+    def _respond_candles(self):
+        cached = self._get_cached('candles')
+        if cached:
+            self._json_response(200, cached)
+            return
+
+        bot = self.bot_instance
+        if not bot or not bot.exchange:
+            self._json_response(503, {"error": "Bot not ready"})
+            return
+
+        try:
+            import pandas as pd
+            df = bot.exchange.fetch_ohlcv(bot.symbol, '5m', limit=120)
+            if df.empty:
+                self._json_response(503, {"error": "No candle data"})
+                return
+
+            df = bot.strategy.indicators.compute(df)
+
+            candles, ema50_data, ema200_data = [], [], []
+            for _, row in df.iterrows():
+                t = int(row['timestamp'].timestamp())
+                candles.append({
+                    'time': t,
+                    'open': round(float(row['open']), 2),
+                    'high': round(float(row['high']), 2),
+                    'low': round(float(row['low']), 2),
+                    'close': round(float(row['close']), 2),
+                })
+                if not pd.isna(row['ema50']):
+                    ema50_data.append({'time': t, 'value': round(float(row['ema50']), 2)})
+                if not pd.isna(row['ema200']):
+                    ema200_data.append({'time': t, 'value': round(float(row['ema200']), 2)})
+
+            data = {'candles': candles, 'ema50': ema50_data, 'ema200': ema200_data}
+            self._set_cached('candles', data)
+            self._json_response(200, data)
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _respond_conditions(self):
+        cached = self._get_cached('conditions')
+        if cached:
+            self._json_response(200, cached)
+            return
+
+        bot = self.bot_instance
+        if not bot or not bot.exchange:
+            self._json_response(503, {"error": "Bot not ready"})
+            return
+
+        try:
+            import pandas as pd
+            from utils import is_trading_session
+
+            utc_now = datetime.now(timezone.utc)
+            symbol = bot.symbol
+
+            df_5m = bot.exchange.fetch_ohlcv(symbol, '5m', limit=250)
+            df_1h = bot.exchange.fetch_ohlcv(symbol, '1h', limit=250)
+
+            if df_5m.empty or df_1h.empty:
+                self._json_response(503, {"error": "No market data"})
+                return
+
+            df_5m = bot.strategy.indicators.compute(df_5m)
+            df_1h = bot.strategy.indicators.compute(df_1h)
+
+            bar_5m = df_5m.iloc[-1]
+            bar_1h = df_1h.iloc[-1]
+
+            price    = round(float(bar_5m['close']), 2)
+            m5_open  = round(float(bar_5m['open']), 2)
+            m5_ema50 = round(float(bar_5m['ema50']), 2) if not pd.isna(bar_5m['ema50']) else None
+            m5_rsi   = round(float(bar_5m['rsi']), 1)  if not pd.isna(bar_5m['rsi'])   else None
+            atr      = round(float(bar_5m['atr']), 2)  if not pd.isna(bar_5m['atr'])   else None
+
+            h1_close  = round(float(bar_1h['close']), 2)
+            h1_ema50  = round(float(bar_1h['ema50']), 2)  if not pd.isna(bar_1h['ema50'])  else None
+            h1_ema200 = round(float(bar_1h['ema200']), 2) if not pd.isna(bar_1h['ema200']) else None
+
+            min_atr       = bot.strategy.min_atr
+            pullback_mult = bot.strategy.pullback_atr_mult
+            pullback_zone = round(pullback_mult * atr, 2) if atr else None
+
+            # ── Session ──
+            utc_hour   = utc_now.hour
+            session_ok = is_trading_session(bot.config, utc_hour)
+            london     = bot.config.get('session_hours_utc', 'london',   default=[8, 12])
+            ny         = bot.config.get('session_hours_utc', 'new_york', default=[13, 17])
+            if london[0] <= utc_hour < london[1]:
+                session_val = f"London ({utc_hour:02d}:xx UTC)"
+            elif ny[0] <= utc_hour < ny[1]:
+                session_val = f"New York ({utc_hour:02d}:xx UTC)"
+            else:
+                session_val = f"Closed ({utc_hour:02d}:xx UTC)"
+
+            # ── 1H Bias ──
+            uptrend   = h1_ema50 is not None and h1_ema200 is not None and h1_close > h1_ema200 and h1_ema50 > h1_ema200
+            downtrend = h1_ema50 is not None and h1_ema200 is not None and h1_close < h1_ema200 and h1_ema50 < h1_ema200
+            bias = "long" if uptrend else ("short" if downtrend else "neutral")
+
+            h1_bias_val = (
+                f"UP — Close {h1_close} > EMA200 {h1_ema200}" if uptrend else
+                f"DOWN — Close {h1_close} < EMA200 {h1_ema200}" if downtrend else
+                f"NEUTRAL — Close {h1_close} / EMA200 {h1_ema200}"
+            )
+            ema_cross_val = f"EMA50 {h1_ema50} {'>' if uptrend else '<'} EMA200 {h1_ema200}" if h1_ema50 and h1_ema200 else "N/A"
+
+            # ── ATR filter ──
+            atr_ok  = atr is not None and atr >= min_atr
+            atr_val = f"{atr} (min {min_atr})" if atr else "N/A"
+
+            # ── Pullback ──
+            pullback_dist = round(abs(price - m5_ema50), 2) if m5_ema50 else None
+            if bias == "long":
+                pullback_ok = m5_ema50 is not None and pullback_zone is not None and price >= m5_ema50 and pullback_dist <= pullback_zone
+            elif bias == "short":
+                pullback_ok = m5_ema50 is not None and pullback_zone is not None and price <= m5_ema50 and pullback_dist <= pullback_zone
+            else:
+                pullback_ok = False
+            pullback_val = f"Dist {pullback_dist} (zone ≤ {pullback_zone})" if pullback_dist is not None else "N/A"
+
+            # ── RSI ──
+            if bias == "long":
+                rsi_ok  = m5_rsi is not None and m5_rsi > 50
+                rsi_req = "> 50 for long"
+            elif bias == "short":
+                rsi_ok  = m5_rsi is not None and m5_rsi < 50
+                rsi_req = "< 50 for short"
+            else:
+                rsi_ok  = False
+                rsi_req = "> 50 (long) / < 50 (short)"
+
+            # ── Candle direction ──
+            bullish = price > m5_open
+            if bias == "long":
+                candle_ok  = bullish
+                candle_val = f"Bullish — C {price} > O {m5_open}" if bullish else f"Bearish — C {price} < O {m5_open}"
+                candle_req = "Bullish close"
+            elif bias == "short":
+                candle_ok  = not bullish
+                candle_val = f"Bearish — C {price} < O {m5_open}" if not bullish else f"Bullish — C {price} > O {m5_open}"
+                candle_req = "Bearish close"
+            else:
+                candle_ok  = False
+                candle_val = f"C {price} / O {m5_open}"
+                candle_req = "Bullish (long) / Bearish (short)"
+
+            # ── Positions ──
+            n_pos    = len(bot.positions)
+            max_pos  = bot.max_positions
+            pos_ok   = n_pos < max_pos
+            pos_val  = f"{n_pos} / {max_pos} open"
+
+            signal_ready = all([session_ok, atr_ok, uptrend or downtrend,
+                                pullback_ok, rsi_ok, candle_ok, pos_ok])
+
+            data = {
+                "symbol": symbol,
+                "timestamp": utc_now.isoformat(),
+                "price": price,
+                "bias": bias,
+                "signal_ready": signal_ready,
+                "conditions": [
+                    {"id": "session",    "label": "Trading Session",    "pass": session_ok,            "value": session_val,    "required": "London 8–12 / NY 13–17 UTC"},
+                    {"id": "atr",        "label": "ATR Filter (5M)",    "pass": atr_ok,                "value": atr_val,        "required": f"≥ {min_atr}"},
+                    {"id": "h1_bias",    "label": "1H Trend Bias",      "pass": uptrend or downtrend,  "value": h1_bias_val,    "required": "Close > EMA200 & EMA50 > EMA200 (or inverse)"},
+                    {"id": "h1_cross",   "label": "1H EMA50 vs EMA200", "pass": uptrend or downtrend,  "value": ema_cross_val,  "required": "EMA50 > EMA200 (long) / EMA50 < EMA200 (short)"},
+                    {"id": "pullback",   "label": "5M Pullback to EMA50","pass": pullback_ok,           "value": pullback_val,   "required": f"Within {pullback_mult}×ATR of EMA50"},
+                    {"id": "rsi",        "label": "5M RSI(14)",          "pass": rsi_ok,                "value": str(m5_rsi) if m5_rsi else "N/A", "required": rsi_req},
+                    {"id": "candle",     "label": "Candle Direction",    "pass": candle_ok,             "value": candle_val,     "required": candle_req},
+                    {"id": "positions",  "label": "Position Limit",      "pass": pos_ok,                "value": pos_val,        "required": f"< {max_pos} concurrent"},
+                ]
+            }
+
+            self._set_cached('conditions', data)
+            self._json_response(200, data)
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
     def log_message(self, format, *args):
         # Suppress default access logs (too noisy with health checks)
         pass
