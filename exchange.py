@@ -49,14 +49,15 @@ class ExchangeClient:
 
     def _init_exchange(self):
         """Initialize CCXT exchange instance."""
-        exchange_name = self.config.get('exchange', 'name', default='binance')
+        exchange_name = self.config.get('exchange', 'name', default='binance').lower()
         api_key = self.config.get('exchange', 'api_key', default='')
         api_secret = self.config.get('exchange', 'api_secret', default='')
-        testnet = self.config.get('exchange', 'testnet', default=True)
+        api_password = self.config.get('exchange', 'api_password', default='')
+        testnet = self.config.get('exchange', 'testnet', default=False)
         market_type = self.config.get('market_type', default='swap')
 
         exchange_class = getattr(ccxt, exchange_name)
-        self.exchange = exchange_class({
+        params = {
             'apiKey': api_key,
             'secret': api_secret,
             'enableRateLimit': True,
@@ -64,7 +65,11 @@ class ExchangeClient:
                 'defaultType': market_type,
                 'adjustForTimeDifference': True,
             }
-        })
+        }
+        if api_password:
+            params['password'] = api_password
+            
+        self.exchange = exchange_class(params)
 
         if testnet:
             self.exchange.set_sandbox_mode(True)
@@ -82,16 +87,19 @@ class ExchangeClient:
 
     def _init_public_exchange(self):
         """Initialize a public (no auth) exchange for data fetching in paper mode."""
+        exchange_name = self.config.get('exchange', 'name', default='binance').lower()
+        market_type = self.config.get('market_type', default='swap')
         try:
-            self._public_exchange = ccxt.binance({
+            exchange_class = getattr(ccxt, exchange_name)
+            self._public_exchange = exchange_class({
                 'enableRateLimit': True,
                 'options': {
-                    'defaultType': 'swap',
+                    'defaultType': market_type,
                     'adjustForTimeDifference': True,
                 }
             })
             self._public_exchange.load_markets()
-            self.logger.info("Public exchange initialized for paper trading data")
+            self.logger.info(f"Public exchange ({exchange_name}) initialized for paper trading data")
         except Exception as e:
             self.logger.warning(f"Public exchange init failed: {e}")
             self._public_exchange = None
@@ -432,7 +440,11 @@ class CandleStreamer:
             try:
                 ex = self.exchange_client._get_data_exchange() if self.exchange_client else None
                 if ex is None:
-                    ex = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
+                    exchange_name = 'binance'
+                    if self.exchange_client and self.exchange_client.config:
+                        exchange_name = self.exchange_client.config.get('exchange', 'name', default='binance').lower()
+                    exchange_class = getattr(ccxt, exchange_name)
+                    ex = exchange_class({'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
 
                 # Fetch latest 5M candles
                 ohlcv_5m = ex.fetch_ohlcv(self.raw_symbol, '5m', limit=5)

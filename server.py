@@ -51,6 +51,7 @@ def build_config_from_env() -> dict:
     config["exchange"]["name"] = os.getenv("EXCHANGE_NAME", config["exchange"].get("name", "binance"))
     config["exchange"]["api_key"] = os.getenv("EXCHANGE_API_KEY", config["exchange"].get("api_key", ""))
     config["exchange"]["api_secret"] = os.getenv("EXCHANGE_API_SECRET", config["exchange"].get("api_secret", ""))
+    config["exchange"]["api_password"] = os.getenv("EXCHANGE_API_PASSWORD", config["exchange"].get("api_password", ""))
     config["exchange"]["testnet"] = os.getenv("EXCHANGE_TESTNET", "false").lower() == "true"
     
     # Risk
