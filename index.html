@@ -237,6 +237,34 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        .mode-toggle {
+            display: flex;
+            gap: 4px;
+            margin-top: 10px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 3px;
+        }
+        .mode-btn {
+            flex: 1;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            cursor: pointer;
+            background: transparent;
+            color: var(--text-muted);
+            transition: all 0.2s;
+        }
+        .mode-btn.active {
+            background: rgba(255,255,255,0.1);
+            color: var(--text-primary);
+        }
+        #btn-live.active { color: var(--gold); }
+        #btn-paper.active { color: var(--paper-mode); }
+
     </style>
 </head>
 <body>
@@ -264,6 +292,10 @@
         <div class="glass-card">
             <div class="card-title">Trading Mode</div>
             <div class="card-value value-cyan" id="bot-mode">--</div>
+            <div class="mode-toggle" id="mode-toggle">
+                <button class="mode-btn active" id="btn-paper" onclick="setMode('paper')">PAPER</button>
+                <button class="mode-btn" id="btn-live" onclick="setMode('live')">LIVE</button>
+            </div>
         </div>
 
         <div class="glass-card">
@@ -331,6 +363,7 @@
                 // Update Cards
                 document.getElementById('bot-mode').textContent = data.bot.mode.toUpperCase();
                 document.getElementById('bot-mode').className = data.bot.mode === 'live' ? 'card-value value-gold' : 'card-value value-cyan';
+                syncToggle(data.bot.mode);
                 
                 document.getElementById('bot-balance').textContent = '$' + data.bot.balance.toLocaleString('en-US', {minimumFractionDigits: 2});
                 document.getElementById('bot-symbol').textContent = data.bot.symbol;
@@ -346,6 +379,32 @@
                 badge.className = 'status-badge bot-stopped';
                 document.getElementById('status-text').textContent = 'Connection Lost';
             }
+        }
+
+        async function setMode(mode) {
+            const confirmed = mode === 'live'
+                ? confirm('Switch to LIVE trading? Real orders will be placed.')
+                : confirm('Switch to PAPER trading?');
+            if (!confirmed) return;
+
+            try {
+                const res = await fetch('/mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    alert('Error: ' + (data.error || res.statusText));
+                }
+            } catch (e) {
+                alert('Request failed: ' + e.message);
+            }
+        }
+
+        function syncToggle(mode) {
+            document.getElementById('btn-paper').classList.toggle('active', mode === 'paper');
+            document.getElementById('btn-live').classList.toggle('active', mode === 'live');
         }
 
         // Poll every 2 seconds

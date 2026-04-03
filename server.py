@@ -124,6 +124,61 @@ class HealthHandler(BaseHTTPRequestHandler):
             self._respond_status()
         else:
             self.send_error(404)
+
+    def do_POST(self):
+        if self.path == "/mode":
+            self._handle_set_mode()
+        else:
+            self.send_error(404)
+
+    def _handle_set_mode(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            new_mode = body.get("mode", "").lower()
+        except Exception:
+            self._json_response(400, {"error": "Invalid JSON body"})
+            return
+
+        if new_mode not in ("paper", "live"):
+            self._json_response(400, {"error": "mode must be 'paper' or 'live'"})
+            return
+
+        bot = self.bot_instance
+        if not bot:
+            self._json_response(503, {"error": "Bot not running"})
+            return
+
+        if new_mode == bot.mode:
+            self._json_response(200, {"mode": bot.mode, "changed": False})
+            return
+
+        if new_mode == "live":
+            api_key = bot.config.get("exchange", "api_key", default="")
+            if not api_key:
+                self._json_response(400, {"error": "EXCHANGE_API_KEY not configured — cannot switch to live"})
+                return
+            try:
+                bot.exchange._init_exchange()
+                bot.exchange.paper_mode = False
+            except Exception as e:
+                self._json_response(500, {"error": f"Exchange init failed: {e}"})
+                return
+        else:
+            bot.exchange.paper_mode = True
+            bot.exchange.exchange = None
+            bot.exchange._init_public_exchange()
+
+        bot.mode = new_mode
+        self._json_response(200, {"mode": new_mode, "changed": True})
+
+    def _json_response(self, code: int, data: dict):
+        body = json.dumps(data).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
             
     def _respond_index(self):
         index_path = os.path.join(os.path.dirname(__file__), "index.html")
