@@ -86,18 +86,31 @@ class ExchangeClient:
             raise
 
     def _init_public_exchange(self):
-        """Initialize a public (no auth) exchange for data fetching in paper mode."""
+        """Initialize exchange for data fetching in paper mode.
+        Some exchanges (e.g. kucoinfutures) require API auth even for public
+        OHLCV endpoints, so credentials are passed when available.
+        """
         exchange_name = self.config.get('exchange', 'name', default='binance').lower()
-        market_type = self.config.get('market_type', default='swap')
+        market_type   = self.config.get('market_type', default='swap')
+        api_key       = self.config.get('exchange', 'api_key',      default='')
+        api_secret    = self.config.get('exchange', 'api_secret',   default='')
+        api_password  = self.config.get('exchange', 'api_password', default='')
         try:
             exchange_class = getattr(ccxt, exchange_name)
-            self._public_exchange = exchange_class({
+            params = {
                 'enableRateLimit': True,
                 'options': {
                     'defaultType': market_type,
                     'adjustForTimeDifference': True,
                 }
-            })
+            }
+            if api_key:
+                params['apiKey'] = api_key
+            if api_secret:
+                params['secret'] = api_secret
+            if api_password:
+                params['password'] = api_password
+            self._public_exchange = exchange_class(params)
             self._public_exchange.load_markets()
             self.logger.info(f"Public exchange ({exchange_name}) initialized for paper trading data")
         except Exception as e:
