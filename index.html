@@ -251,6 +251,57 @@
             content: ''; flex: 1; height: 1px; background: var(--glass-border);
         }
 
+        /* ── Trade History ──────────────────────────────── */
+        .trades-card {
+            grid-column: 1 / -1;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 1.5rem 2rem;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        }
+        .trades-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;
+        }
+        .trades-title { font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 2px; font-weight: 600; }
+        .summary-pills { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+        .s-pill {
+            padding: 4px 12px; border-radius: 50px; font-size: 0.75rem;
+            font-weight: 700; font-family: 'JetBrains Mono', monospace;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            white-space: nowrap;
+        }
+        .s-pill.green { color: var(--success); border-color: rgba(0,255,136,0.25); }
+        .s-pill.red   { color: var(--danger);  border-color: rgba(255,51,102,0.25); }
+        .s-pill.gold  { color: var(--accent-gold); border-color: rgba(244,208,63,0.25); }
+        .s-pill.muted { color: var(--text-muted); }
+
+        .trades-table-wrap { overflow-x: auto; }
+        table {
+            width: 100%; border-collapse: collapse;
+            font-size: 0.8rem; font-family: 'JetBrains Mono', monospace;
+        }
+        thead th {
+            text-align: left; padding: 0.5rem 0.75rem;
+            font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em;
+            color: var(--text-muted); border-bottom: 1px solid var(--glass-border);
+            white-space: nowrap;
+        }
+        tbody tr { border-bottom: 1px solid rgba(255,255,255,0.03); transition: background 0.15s; }
+        tbody tr:hover { background: rgba(255,255,255,0.03); }
+        tbody td { padding: 0.55rem 0.75rem; white-space: nowrap; }
+        .td-side-long  { color: var(--success); font-weight: 700; }
+        .td-side-short { color: var(--danger);  font-weight: 700; }
+        .td-pnl-pos { color: var(--success); font-weight: 700; }
+        .td-pnl-neg { color: var(--danger);  font-weight: 700; }
+        .td-status-open   { color: var(--accent-gold); }
+        .td-status-closed { color: var(--text-muted); }
+        .td-reason { font-size: 0.7rem; color: var(--text-muted); }
+        .no-trades { text-align: center; padding: 3rem; color: var(--text-muted); font-size: 0.85rem; }
+
         /* ── Terminal ───────────────────────────────────── */
         .terminal-container {
             grid-column: 1 / -1;
@@ -378,6 +429,38 @@
                 </div>
             </div>
 
+        </div>
+
+        <!-- Trade History -->
+        <div class="trades-card">
+            <div class="trades-header">
+                <div class="trades-title">Trade History</div>
+                <div class="summary-pills" id="trade-summary">
+                    <span class="s-pill muted">Loading...</span>
+                </div>
+            </div>
+            <div class="trades-table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Side</th>
+                            <th>Entry</th>
+                            <th>Exit</th>
+                            <th>SL</th>
+                            <th>TP1</th>
+                            <th>Qty</th>
+                            <th>PnL</th>
+                            <th>PnL %</th>
+                            <th>Status</th>
+                            <th>Exit Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trades-body">
+                        <tr><td colspan="11" class="no-trades">Waiting for first trade...</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <!-- Terminal -->
@@ -575,13 +658,83 @@
         document.getElementById('btn-live').classList.toggle('active',  mode === 'live');
     }
 
+    // ── Trades ───────────────────────────────────────────────
+    async function fetchTrades() {
+        try {
+            const res = await fetch('/trades');
+            if (!res.ok) return;
+            const data = await res.json();
+            renderTrades(data);
+        } catch (e) {}
+    }
+
+    function fmt(val, dec = 2) {
+        if (val === null || val === undefined || val === 0) return '—';
+        return Number(val).toFixed(dec);
+    }
+    function fmtTime(iso) {
+        if (!iso) return '—';
+        const d = new Date(iso);
+        return d.toLocaleDateString('en-GB', { day:'2-digit', month:'short' })
+             + ' ' + d.toTimeString().slice(0, 5);
+    }
+    function reasonLabel(r) {
+        const map = { tp1:'TP1', trail_stop:'Trail Stop', sl:'Stop Loss',
+                      opposite_signal:'Opp. Signal', emergency_dd_stop:'Emergency' };
+        return map[r] || r || '—';
+    }
+
+    function renderTrades(data) {
+        const s = data.summary || {};
+        const pnlClass = (s.total_pnl || 0) >= 0 ? 'green' : 'red';
+        document.getElementById('trade-summary').innerHTML = `
+            <span class="s-pill muted">Total: ${s.total_trades ?? 0}</span>
+            <span class="s-pill green">W: ${s.wins ?? 0}</span>
+            <span class="s-pill red">L: ${s.losses ?? 0}</span>
+            <span class="s-pill gold">WR: ${s.win_rate_pct ?? 0}%</span>
+            <span class="s-pill ${pnlClass}">PnL: $${fmt(s.total_pnl)}</span>
+            <span class="s-pill green">Avg Win: $${fmt(s.avg_win)}</span>
+            <span class="s-pill red">Avg Loss: $${fmt(s.avg_loss)}</span>
+            <span class="s-pill muted">Open: ${s.open_trades ?? 0}</span>
+        `;
+        const trades = data.trades || [];
+        const tbody = document.getElementById('trades-body');
+        if (!trades.length) {
+            tbody.innerHTML = '<tr><td colspan="11" class="no-trades">No trades recorded yet — bot is scanning for signals.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = trades.map(t => {
+            const sideCls  = t.side === 'long' ? 'td-side-long' : 'td-side-short';
+            const sideIcon = t.side === 'long' ? '▲' : '▼';
+            const pnl      = t.pnl || 0;
+            const pnlCls   = pnl > 0 ? 'td-pnl-pos' : pnl < 0 ? 'td-pnl-neg' : '';
+            const pnlSign  = pnl > 0 ? '+' : '';
+            const stCls    = t.status === 'closed' ? 'td-status-closed' : 'td-status-open';
+            return `<tr>
+                <td>${fmtTime(t.entry_time)}</td>
+                <td class="${sideCls}">${sideIcon} ${t.side.toUpperCase()}</td>
+                <td>${fmt(t.entry_price)}</td>
+                <td>${t.exit_price ? fmt(t.exit_price) : '—'}</td>
+                <td>${fmt(t.sl_price)}</td>
+                <td>${fmt(t.tp1_price)}</td>
+                <td>${fmt(t.quantity, 4)}</td>
+                <td class="${pnlCls}">${t.status === 'closed' ? pnlSign + '$' + fmt(Math.abs(pnl)) : '—'}</td>
+                <td class="${pnlCls}">${t.status === 'closed' ? pnlSign + fmt(t.pnl_pct) + '%' : '—'}</td>
+                <td class="${stCls}">${t.status.toUpperCase()}</td>
+                <td class="td-reason">${reasonLabel(t.exit_reason)}</td>
+            </tr>`;
+        }).join('');
+    }
+
     // ── Poll ─────────────────────────────────────────────────
     fetchStatus();
     fetchCandles();
     fetchConditions();
+    fetchTrades();
     setInterval(fetchStatus,     2000);
     setInterval(fetchCandles,   10000);
     setInterval(fetchConditions,10000);
+    setInterval(fetchTrades,    15000);
     </script>
 </body>
 </html>

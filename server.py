@@ -139,6 +139,8 @@ class HealthHandler(BaseHTTPRequestHandler):
             self._respond_candles()
         elif self.path == "/conditions":
             self._respond_conditions()
+        elif self.path == "/trades":
+            self._respond_trades()
         else:
             self.send_error(404)
 
@@ -454,6 +456,40 @@ class HealthHandler(BaseHTTPRequestHandler):
 
             self._set_cached('conditions', data)
             self._json_response(200, data)
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _respond_trades(self):
+        bot = self.bot_instance
+        if not bot:
+            self._json_response(503, {"error": "Bot not ready"})
+            return
+        try:
+            trades = bot.db.get_all_trades()
+            closed = [t for t in trades if t['status'] == 'closed']
+            open_  = [t for t in trades if t['status'] in ('open', 'partial')]
+            wins   = [t for t in closed if t['pnl'] > 0]
+            losses = [t for t in closed if t['pnl'] <= 0]
+            total_pnl   = round(sum(t['pnl'] for t in closed), 2)
+            win_rate    = round(len(wins) / len(closed) * 100, 1) if closed else 0.0
+            avg_win     = round(sum(t['pnl'] for t in wins)   / len(wins),   2) if wins   else 0.0
+            avg_loss    = round(sum(t['pnl'] for t in losses) / len(losses), 2) if losses else 0.0
+
+            # Return most recent 50 trades (newest first) for display
+            recent = sorted(trades, key=lambda t: t['entry_time'], reverse=True)[:50]
+            self._json_response(200, {
+                "summary": {
+                    "total_trades":  len(closed),
+                    "open_trades":   len(open_),
+                    "wins":          len(wins),
+                    "losses":        len(losses),
+                    "win_rate_pct":  win_rate,
+                    "total_pnl":     total_pnl,
+                    "avg_win":       avg_win,
+                    "avg_loss":      avg_loss,
+                },
+                "trades": recent,
+            })
         except Exception as e:
             self._json_response(500, {"error": str(e)})
 
