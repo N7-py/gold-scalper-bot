@@ -116,12 +116,26 @@ class HealthHandler(BaseHTTPRequestHandler):
     start_time = time.time()
     
     def do_GET(self):
-        if self.path == "/" or self.path == "/health":
+        if self.path == "/":
+            self._respond_index()
+        elif self.path == "/health":
             self._respond_health()
         elif self.path == "/status":
             self._respond_status()
         else:
             self.send_error(404)
+            
+    def _respond_index(self):
+        index_path = os.path.join(os.path.dirname(__file__), "index.html")
+        if os.path.exists(index_path):
+            with open(index_path, "rb") as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(content)
+        else:
+            self.send_error(404, "Dashboard not found")
     
     def _respond_health(self):
         self.send_response(200)
