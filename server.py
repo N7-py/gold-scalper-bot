@@ -153,6 +153,8 @@ class HealthHandler(BaseHTTPRequestHandler):
             self._handle_set_mode()
         elif self.path == "/force_trade":
             self._handle_force_trade()
+        elif self.path == "/force_close":
+            self._handle_force_close()
         else:
             self.send_error(404)
 
@@ -558,6 +560,83 @@ class HealthHandler(BaseHTTPRequestHandler):
                 "tp1_price": tp1_price,
                 "quantity": qty,
                 "balance": balance,
+            })
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _handle_force_close(self):
+        """
+        POST /force_close  body: {"trade_id": "..."}  (optional — closes first open position if omitted)
+        Closes a paper trade at current market price and writes closed record to DB.
+        Paper mode only.
+        """
+        bot = self.bot_instance
+        if not bot:
+            self._json_response(503, {"error": "Bot not ready"})
+            return
+        if bot.mode != "paper":
+            self._json_response(400, {"error": "force_close only allowed in paper mode"})
+            return
+        try:
+            import pandas as pd
+            from datetime import datetime, timezone
+
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            trade_id = body.get("trade_id")
+
+            # Find the position
+            if trade_id:
+                pos = next((p for p in bot.positions if p.trade_id == trade_id), None)
+            else:
+                pos = bot.positions[0] if bot.positions else None
+
+            if pos is None:
+                self._json_response(404, {"error": "No open position found"})
+                return
+
+            # Get current price
+            df_5m = bot.exchange.fetch_ohlcv(bot.symbol, '5m', limit=5)
+            if df_5m.empty:
+                self._json_response(503, {"error": "Cannot fetch market data"})
+                return
+            exit_price = float(df_5m.iloc[-1]['close'])
+
+            # PnL
+            if pos.side == 'long':
+                pnl = (exit_price - pos.entry_price) * pos.remaining_qty
+            else:
+                pnl = (pos.entry_price - exit_price) * pos.remaining_qty
+            pnl_pct = (pnl / (pos.entry_price * pos.quantity)) * 100
+
+            # Update paper balance
+            bot.exchange.update_paper_balance(pnl)
+
+            # Write to DB
+            now = datetime.now(timezone.utc)
+            bot.db.update_trade(pos.trade_id, {
+                'status': 'closed',
+                'exit_price': exit_price,
+                'exit_time': now.isoformat(),
+                'pnl': round(pnl, 4),
+                'pnl_pct': round(pnl_pct, 4),
+                'exit_reason': 'manual_close',
+                'remaining_qty': 0
+            })
+            today = now.strftime('%Y-%m-%d')
+            bot.db.update_daily_pnl(today, pnl, pnl > 0, bot.exchange.get_balance())
+
+            bot.positions.remove(pos)
+
+            self._json_response(200, {
+                "ok": True,
+                "trade_id": pos.trade_id,
+                "side": pos.side,
+                "entry_price": pos.entry_price,
+                "exit_price": exit_price,
+                "pnl": round(pnl, 4),
+                "pnl_pct": round(pnl_pct, 2),
+                "exit_reason": "manual_close",
             })
         except Exception as e:
             self._json_response(500, {"error": str(e)})

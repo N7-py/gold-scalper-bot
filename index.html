@@ -381,6 +381,9 @@
                 <button class="mode-btn" style="background:rgba(0,200,100,0.15);border:1px solid #00c864;color:#00c864;flex:1" onclick="forceTrade('long')">▲ Force LONG</button>
                 <button class="mode-btn" style="background:rgba(255,60,60,0.15);border:1px solid #ff3c3c;color:#ff3c3c;flex:1" onclick="forceTrade('short')">▼ Force SHORT</button>
             </div>
+            <div style="margin-top:6px;">
+                <button class="mode-btn" style="background:rgba(255,165,0,0.15);border:1px solid #ffa500;color:#ffa500;width:100%" onclick="forceClose()">✕ Force Close (first open)</button>
+            </div>
             <div id="force-trade-result" style="margin-top:6px;font-size:11px;color:#aaa;word-break:break-all;"></div>
         </div>
 
@@ -667,6 +670,29 @@
             if (res.ok) {
                 el.style.color = side === 'long' ? '#00c864' : '#ff3c3c';
                 el.textContent = `✓ ${side.toUpperCase()} opened @ ${data.entry_price} | SL ${data.sl_price} | TP1 ${data.tp1_price} | Qty ${data.quantity} | ID: ${data.trade_id}`;
+                fetchTrades();
+            } else {
+                el.style.color = '#ff9900';
+                el.textContent = '✗ ' + (data.error || 'Unknown error');
+            }
+        } catch (e) {
+            el.style.color = '#ff9900';
+            el.textContent = '✗ Request failed: ' + e.message;
+        }
+    }
+
+    async function forceClose(tradeId) {
+        const el = document.getElementById('force-trade-result');
+        el.style.color = '#ffa500';
+        el.textContent = 'Closing position...';
+        try {
+            const body = tradeId ? { trade_id: tradeId } : {};
+            const res  = await fetch('/force_close', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+            const data = await res.json();
+            if (res.ok) {
+                const pnlSign = data.pnl >= 0 ? '+' : '';
+                el.style.color = data.pnl >= 0 ? '#00c864' : '#ff3c3c';
+                el.textContent = `✓ CLOSED ${data.side.toUpperCase()} @ ${data.exit_price} | PnL ${pnlSign}$${Math.abs(data.pnl).toFixed(2)} (${pnlSign}${data.pnl_pct}%) | ${data.exit_reason}`;
                 fetchTrades();
             } else {
                 el.style.color = '#ff9900';
