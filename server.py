@@ -68,14 +68,18 @@ def build_config_from_env() -> dict:
     config["strategy"].setdefault("ema_slow", 200)
     config["strategy"].setdefault("rsi_period", 14)
     config["strategy"].setdefault("atr_period", 14)
-    config["strategy"].setdefault("pullback_atr_mult", 1.0)
+    config["strategy"].setdefault("pullback_atr_mult", 2.0)
     config["strategy"].setdefault("sl_atr_mult", 1.5)
     config["strategy"].setdefault("tp1_atr_mult", 2.0)
     config["strategy"].setdefault("trail_atr_mult", 1.0)
     config["strategy"].setdefault("tp1_close_pct", 0.5)
-    
-    # Session hours
-    config.setdefault("session_hours_utc", {"london": [8, 12], "new_york": [13, 17]})
+    config["strategy"].setdefault("short_sl_atr_mult", 2.0)
+    config["strategy"].setdefault("short_tp1_atr_mult", 3.0)
+    config["strategy"].setdefault("rsi_bear_range_period", 10)
+    config["strategy"].setdefault("rsi_bear_range_max", 65.0)
+
+    # Session hours — wide windows to cover London + NY fully (XAUT trades 24/7)
+    config.setdefault("session_hours_utc", {"london": [7, 16], "new_york": [13, 21]})
     
     # Execution
     config.setdefault("execution", {"order_type": "market", "use_oco": False})
@@ -385,9 +389,9 @@ class HealthHandler(BaseHTTPRequestHandler):
 
             # ── LONG conditions (evaluated independently) ──
             long_pullback_ok = (m5_ema50 is not None and pullback_zone is not None
-                                and price >= m5_ema50 and pullback_dist <= pullback_zone)
-            long_rsi_ok      = m5_rsi is not None and m5_rsi > 50
-            long_candle_ok   = bullish
+                                and pullback_dist <= pullback_zone)
+            long_rsi_ok      = m5_rsi is not None and m5_rsi > 45
+            long_candle_ok   = bullish  # informational only
             long_candle_val  = (f"Bullish — C {price} > O {m5_open}" if bullish
                                 else f"Bearish — C {price} < O {m5_open}")
             long_h1_val      = (f"UP — Close {h1_close} > EMA200 {h1_ema200}" if uptrend
@@ -395,24 +399,24 @@ class HealthHandler(BaseHTTPRequestHandler):
             long_cross_val   = (f"EMA50 {h1_ema50} > EMA200 {h1_ema200}" if h1_ema50 and h1_ema200
                                 else "N/A")
             long_signal_ready = all([session_ok, atr_ok, uptrend,
-                                     long_pullback_ok, long_rsi_ok, long_candle_ok, pos_ok])
+                                     long_pullback_ok, long_rsi_ok, pos_ok])
 
             long_conditions = [
-                {"id": "session",   "label": "Trading Session",      "pass": session_ok,       "value": session_val,    "required": "London 8–12 / NY 13–17 UTC"},
+                {"id": "session",   "label": "Trading Session",      "pass": session_ok,       "value": session_val,    "required": "London 7–16 / NY 13–21 UTC"},
                 {"id": "atr",       "label": "ATR Filter (5M)",      "pass": atr_ok,           "value": atr_val,        "required": f"≥ {min_atr}"},
                 {"id": "h1_bias",   "label": "1H Trend Bias",        "pass": uptrend,          "value": long_h1_val,    "required": "Close > EMA200 (bullish structure)"},
                 {"id": "h1_cross",  "label": "1H EMA50 vs EMA200 (info)", "pass": uptrend,      "value": long_cross_val, "required": "EMA50 > EMA200 (informational)"},
                 {"id": "pullback",  "label": "5M Pullback to EMA50", "pass": long_pullback_ok, "value": pullback_val,   "required": f"Price ≥ EMA50, within {pullback_mult}×ATR"},
-                {"id": "rsi",       "label": "5M RSI(14)",            "pass": long_rsi_ok,      "value": rsi_val,        "required": "> 50 (bullish momentum)"},
-                {"id": "candle",    "label": "Candle Direction",      "pass": long_candle_ok,   "value": long_candle_val,"required": "Bullish close (Close > Open)"},
+                {"id": "rsi",       "label": "5M RSI(14)",            "pass": long_rsi_ok,      "value": rsi_val,        "required": "> 45 (bullish momentum)"},
+                {"id": "candle",    "label": "Candle Direction (info)", "pass": long_candle_ok, "value": long_candle_val,"required": "Bullish preferred (informational)"},
                 {"id": "positions", "label": "Position Limit",        "pass": pos_ok,           "value": pos_val,        "required": f"< {max_pos} concurrent"},
             ]
 
             # ── SHORT conditions (evaluated independently, includes enhanced filters) ──
             short_pullback_ok = (m5_ema50 is not None and pullback_zone is not None
-                                 and price <= m5_ema50 and pullback_dist <= pullback_zone)
-            short_rsi_ok      = m5_rsi is not None and m5_rsi < 50
-            short_candle_ok   = not bullish
+                                 and pullback_dist <= pullback_zone)
+            short_rsi_ok      = m5_rsi is not None and m5_rsi < 55
+            short_candle_ok   = not bullish  # informational only
             short_candle_val  = (f"Bearish — C {price} < O {m5_open}" if not bullish
                                  else f"Bullish — C {price} > O {m5_open}")
             short_h1_val      = (f"DOWN — Close {h1_close} < EMA200 {h1_ema200}" if downtrend
@@ -420,17 +424,17 @@ class HealthHandler(BaseHTTPRequestHandler):
             short_cross_val   = (f"EMA50 {h1_ema50} < EMA200 {h1_ema200}" if h1_ema50 and h1_ema200
                                  else "N/A")
             short_signal_ready = all([session_ok, atr_ok, downtrend,
-                                      short_pullback_ok, short_rsi_ok, short_candle_ok,
+                                      short_pullback_ok, short_rsi_ok,
                                       pos_ok, rsi_br_ok])
 
             short_conditions = [
-                {"id": "session",        "label": "Trading Session",          "pass": session_ok,        "value": session_val,    "required": "London 8–12 / NY 13–17 UTC"},
+                {"id": "session",        "label": "Trading Session",          "pass": session_ok,        "value": session_val,    "required": "London 7–16 / NY 13–21 UTC"},
                 {"id": "atr",            "label": "ATR Filter (5M)",          "pass": atr_ok,            "value": atr_val,        "required": f"≥ {min_atr}"},
                 {"id": "h1_bias",        "label": "1H Trend Bias",            "pass": downtrend,         "value": short_h1_val,   "required": "Close < EMA200 (bearish structure)"},
                 {"id": "h1_cross",       "label": "1H EMA50 vs EMA200 (info)", "pass": downtrend,        "value": short_cross_val,"required": "EMA50 < EMA200 (informational)"},
                 {"id": "pullback",       "label": "5M Pullback to EMA50",     "pass": short_pullback_ok, "value": pullback_val,   "required": f"Price ≤ EMA50, within {pullback_mult}×ATR"},
-                {"id": "rsi",            "label": "5M RSI(14)",                "pass": short_rsi_ok,      "value": rsi_val,        "required": "< 50 (bearish momentum)"},
-                {"id": "candle",         "label": "Candle Direction",          "pass": short_candle_ok,   "value": short_candle_val,"required": "Bearish close (Close < Open)"},
+                {"id": "rsi",            "label": "5M RSI(14)",                "pass": short_rsi_ok,      "value": rsi_val,        "required": "< 55 (bearish momentum)"},
+                {"id": "candle",         "label": "Candle Direction (info)",   "pass": short_candle_ok,   "value": short_candle_val,"required": "Bearish preferred (informational)"},
                 {"id": "positions",      "label": "Position Limit",            "pass": pos_ok,            "value": pos_val,        "required": f"< {max_pos} concurrent"},
                 {"id": "rsi_bear_range", "label": "RSI Bear Range (10-bar)",  "pass": rsi_br_ok,         "value": rsi_br_val,     "required": f"10-bar RSI max < {rsi_br_max} (no hidden bullish momentum)"},
                 {"id": "macd",           "label": "MACD(8,17,9) Histogram (info)", "pass": macd_ok,      "value": macd_val,       "required": "< 0 (informational — not a hard gate)"},

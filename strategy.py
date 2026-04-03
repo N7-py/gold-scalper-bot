@@ -198,33 +198,24 @@ class StrategyEngine:
                 # Allow only if we also allow a short — but max 2 total checked above
                 pass
 
-            # Condition 2: Pullback to EMA50 from above
-            pullback_to_ema50 = (
-                m5_close >= m5_ema50 and
-                abs(m5_close - m5_ema50) <= pullback_zone
-            )
-            # Alternative: previous bar was further from EMA50
-            came_from_above = (
-                m5_prev_close is not None and
-                m5_prev_ema50 is not None and
-                (m5_prev_close > m5_prev_ema50 or m5_close <= m5_ema50 + pullback_zone)
-            )
+            # Condition 2: Price near EMA50 (pullback zone — allow slight overshoot)
+            pullback_to_ema50 = abs(m5_close - m5_ema50) <= pullback_zone
 
-            # Condition 3: RSI > 50
-            rsi_ok = m5_rsi > 50
+            # Condition 3: RSI > 45 (relaxed from 50 — at EMA50 pullback RSI is often 45-55)
+            rsi_ok = m5_rsi > 45
 
-            # Condition 4: Bullish candle
+            # Candle direction — informational, not a hard gate
             bullish = m5_close > m5_open
 
-            if pullback_to_ema50 and rsi_ok and bullish:
+            if pullback_to_ema50 and rsi_ok:
                 sl_price = m5_close - (self.sl_atr_mult * atr)
                 tp1_price = m5_close + (self.tp1_atr_mult * atr)
 
+                candle_note = "Bullish" if bullish else "Bearish"
                 reason = (
-                    f"LONG | 1H bias UP (C={h1_close:.2f}>EMA200={h1_ema200:.2f}, "
-                    f"EMA50={h1_ema50:.2f}>EMA200) | "
-                    f"5M pullback to EMA50={m5_ema50:.2f} (dist={abs(m5_close-m5_ema50):.2f}) | "
-                    f"RSI={m5_rsi:.1f} | Bullish candle | ATR={atr:.2f}"
+                    f"LONG | 1H bias UP (C={h1_close:.2f}>EMA200={h1_ema200:.2f}) | "
+                    f"5M near EMA50={m5_ema50:.2f} (dist={abs(m5_close-m5_ema50):.2f}) | "
+                    f"RSI={m5_rsi:.1f} | Candle={candle_note} | ATR={atr:.2f}"
                 )
                 self.logger.info(f"📈 LONG signal: {reason}")
 
@@ -240,16 +231,13 @@ class StrategyEngine:
 
         # ── SHORT SIGNAL (enhanced — research-backed conditions) ─────────────
         if downtrend_bias:
-            # Condition 2: Pullback to EMA50 from below
-            pullback_to_ema50 = (
-                m5_close <= m5_ema50 and
-                abs(m5_close - m5_ema50) <= pullback_zone
-            )
+            # Condition 2: Price near EMA50 (pullback zone — allow slight overshoot)
+            pullback_to_ema50 = abs(m5_close - m5_ema50) <= pullback_zone
 
-            # Condition 3: RSI < 50 (trend-following confirmation)
-            rsi_ok = m5_rsi < 50
+            # Condition 3: RSI < 55 (relaxed from 50 — allows momentum confirmation at pullback)
+            rsi_ok = m5_rsi < 55
 
-            # Condition 4: Bearish candle
+            # Candle direction — informational, not a hard gate
             bearish = m5_close < m5_open
 
             # Condition 5 (NEW): RSI Bear Range
@@ -274,7 +262,7 @@ class StrategyEngine:
             # because it never reaches overbought, which would block all valid shorts.
             stochrsi_k = bar_5m.get('stochrsi_k', np.nan)
 
-            if pullback_to_ema50 and rsi_ok and bearish and rsi_bear_range_ok:
+            if pullback_to_ema50 and rsi_ok and rsi_bear_range_ok:
                 # Short-specific ATR multipliers (wider SL + deeper TP vs longs):
                 # SL 2.0x: gold squeeze wicks routinely pierce 1.5x ATR
                 # TP1 3.0x: gold shorts have documented larger average moves than longs
