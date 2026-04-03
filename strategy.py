@@ -172,8 +172,8 @@ class StrategyEngine:
         if pd.isna(h1_ema50) or pd.isna(h1_ema200):
             return None
 
-        uptrend_bias = (h1_close > h1_ema200) and (h1_ema50 > h1_ema200)
-        downtrend_bias = (h1_close < h1_ema200) and (h1_ema50 < h1_ema200)
+        uptrend_bias = h1_close > h1_ema200
+        downtrend_bias = h1_close < h1_ema200
 
         # ── 5M conditions ───────────────────────────
         m5_close = bar_5m['close']
@@ -274,7 +274,7 @@ class StrategyEngine:
             # because it never reaches overbought, which would block all valid shorts.
             stochrsi_k = bar_5m.get('stochrsi_k', np.nan)
 
-            if pullback_to_ema50 and rsi_ok and bearish and rsi_bear_range_ok and macd_ok:
+            if pullback_to_ema50 and rsi_ok and bearish and rsi_bear_range_ok:
                 # Short-specific ATR multipliers (wider SL + deeper TP vs longs):
                 # SL 2.0x: gold squeeze wicks routinely pierce 1.5x ATR
                 # TP1 3.0x: gold shorts have documented larger average moves than longs
