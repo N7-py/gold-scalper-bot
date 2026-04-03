@@ -145,8 +145,8 @@ class StrategyEngine:
         if len(current_positions) >= self.max_positions:
             return None
 
-        # Need enough data
-        if len(df_5m) < 210 or len(df_1h) < 210:
+        # Need enough data for indicators — EMA200 NaN checks below handle warmup
+        if len(df_5m) < 50 or len(df_1h) < 50:
             return None
 
         # ── Get latest bars ──────────────────────────

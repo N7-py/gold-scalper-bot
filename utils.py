@@ -335,7 +335,7 @@ def is_trading_session(config: ConfigLoader, utc_hour: int) -> bool:
     """Check if current UTC hour is within configured London or NY session window."""
     london = config.get('session_hours_utc', 'london', default=[8, 12])
     ny = config.get('session_hours_utc', 'new_york', default=[13, 17])
-    return (london[0] <= utc_hour <= london[1]) or (ny[0] <= utc_hour <= ny[1])
+    return (london[0] <= utc_hour < london[1]) or (ny[0] <= utc_hour < ny[1])
 
 
 # ─────────────────────────────────────────────
