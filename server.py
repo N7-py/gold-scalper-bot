@@ -315,11 +315,13 @@ class HealthHandler(BaseHTTPRequestHandler):
             bar_5m = df_5m.iloc[-1]
             bar_1h = df_1h.iloc[-1]
 
-            price    = round(float(bar_5m['close']), 2)
-            m5_open  = round(float(bar_5m['open']), 2)
-            m5_ema50 = round(float(bar_5m['ema50']), 2) if not pd.isna(bar_5m['ema50']) else None
-            m5_rsi   = round(float(bar_5m['rsi']), 1)  if not pd.isna(bar_5m['rsi'])   else None
-            atr      = round(float(bar_5m['atr']), 2)  if not pd.isna(bar_5m['atr'])   else None
+            price      = round(float(bar_5m['close']), 2)
+            m5_open    = round(float(bar_5m['open']), 2)
+            m5_ema50   = round(float(bar_5m['ema50']), 2)      if not pd.isna(bar_5m['ema50'])      else None
+            m5_rsi     = round(float(bar_5m['rsi']), 1)        if not pd.isna(bar_5m['rsi'])        else None
+            atr        = round(float(bar_5m['atr']), 2)        if not pd.isna(bar_5m['atr'])        else None
+            macd_hist  = round(float(bar_5m['macd_hist']), 4)  if not pd.isna(bar_5m['macd_hist'])  else None
+            stochrsi_k = round(float(bar_5m['stochrsi_k']), 1) if not pd.isna(bar_5m['stochrsi_k']) else None
 
             h1_close  = round(float(bar_1h['close']), 2)
             h1_ema50  = round(float(bar_1h['ema50']), 2)  if not pd.isna(bar_1h['ema50'])  else None
@@ -328,6 +330,13 @@ class HealthHandler(BaseHTTPRequestHandler):
             min_atr       = bot.strategy.min_atr
             pullback_mult = bot.strategy.pullback_atr_mult
             pullback_zone = round(pullback_mult * atr, 2) if atr else None
+
+            # RSI Bear Range (short-specific) — RSI max over last N bars
+            rsi_br_period = bot.strategy.rsi_bear_range_period
+            rsi_br_max    = bot.strategy.rsi_bear_range_max
+            rsi_window    = df_5m['rsi'].iloc[-(rsi_br_period + 1):-1].dropna()
+            rsi_br_value  = round(float(rsi_window.max()), 1) if len(rsi_window) > 0 else None
+            rsi_br_ok     = rsi_br_value is not None and rsi_br_value < rsi_br_max
 
             # ── Session ──
             utc_hour   = utc_now.hour
@@ -399,8 +408,50 @@ class HealthHandler(BaseHTTPRequestHandler):
             pos_ok   = n_pos < max_pos
             pos_val  = f"{n_pos} / {max_pos} open"
 
-            signal_ready = all([session_ok, atr_ok, uptrend or downtrend,
-                                pullback_ok, rsi_ok, candle_ok, pos_ok])
+            # Short-specific conditions
+            macd_ok  = macd_hist is not None and macd_hist < 0
+            macd_val = f"{macd_hist}" if macd_hist is not None else "N/A"
+
+            if bias == "short":
+                signal_ready = all([session_ok, atr_ok, downtrend,
+                                    pullback_ok, rsi_ok, candle_ok, pos_ok,
+                                    rsi_br_ok, macd_ok])
+            else:
+                signal_ready = all([session_ok, atr_ok, uptrend or downtrend,
+                                    pullback_ok, rsi_ok, candle_ok, pos_ok])
+
+            conditions = [
+                {"id": "session",    "label": "Trading Session",     "pass": session_ok,           "value": session_val,    "required": "London 8–12 / NY 13–17 UTC"},
+                {"id": "atr",        "label": "ATR Filter (5M)",     "pass": atr_ok,               "value": atr_val,        "required": f"≥ {min_atr}"},
+                {"id": "h1_bias",    "label": "1H Trend Bias",       "pass": uptrend or downtrend, "value": h1_bias_val,    "required": "Close > EMA200 & EMA50 > EMA200 (or inverse)"},
+                {"id": "h1_cross",   "label": "1H EMA50 vs EMA200",  "pass": uptrend or downtrend, "value": ema_cross_val,  "required": "EMA50 > EMA200 (long) / EMA50 < EMA200 (short)"},
+                {"id": "pullback",   "label": "5M Pullback to EMA50","pass": pullback_ok,           "value": pullback_val,   "required": f"Within {pullback_mult}×ATR of EMA50"},
+                {"id": "rsi",        "label": "5M RSI(14)",           "pass": rsi_ok,               "value": str(m5_rsi) if m5_rsi else "N/A", "required": rsi_req},
+                {"id": "candle",     "label": "Candle Direction",     "pass": candle_ok,            "value": candle_val,     "required": candle_req},
+                {"id": "positions",  "label": "Position Limit",       "pass": pos_ok,               "value": pos_val,        "required": f"< {max_pos} concurrent"},
+            ]
+
+            # Append short-specific conditions when bias is short (or neutral for visibility)
+            if bias in ("short", "neutral"):
+                rsi_br_val = (f"10-bar max RSI={rsi_br_value} (need <{rsi_br_max})"
+                              if rsi_br_value is not None else "N/A")
+                conditions.append({
+                    "id": "rsi_bear_range", "label": "RSI Bear Range (10-bar)",
+                    "pass": rsi_br_ok, "value": rsi_br_val,
+                    "required": f"RSI 10-bar max < {rsi_br_max} (no hidden bullish momentum)"
+                })
+                conditions.append({
+                    "id": "macd_short", "label": "MACD(8,17,9) Histogram",
+                    "pass": macd_ok, "value": macd_val,
+                    "required": "< 0 (bearish momentum confirmed)"
+                })
+                stochrsi_note = f"{stochrsi_k}" if stochrsi_k is not None else "N/A"
+                conditions.append({
+                    "id": "stochrsi", "label": "StochRSI(14) K — informational",
+                    "pass": stochrsi_k is not None and stochrsi_k > 60,
+                    "value": stochrsi_note,
+                    "required": ">60 at entry (not a hard gate — unreliable in strong trends)"
+                })
 
             data = {
                 "symbol": symbol,
@@ -408,16 +459,7 @@ class HealthHandler(BaseHTTPRequestHandler):
                 "price": price,
                 "bias": bias,
                 "signal_ready": signal_ready,
-                "conditions": [
-                    {"id": "session",    "label": "Trading Session",    "pass": session_ok,            "value": session_val,    "required": "London 8–12 / NY 13–17 UTC"},
-                    {"id": "atr",        "label": "ATR Filter (5M)",    "pass": atr_ok,                "value": atr_val,        "required": f"≥ {min_atr}"},
-                    {"id": "h1_bias",    "label": "1H Trend Bias",      "pass": uptrend or downtrend,  "value": h1_bias_val,    "required": "Close > EMA200 & EMA50 > EMA200 (or inverse)"},
-                    {"id": "h1_cross",   "label": "1H EMA50 vs EMA200", "pass": uptrend or downtrend,  "value": ema_cross_val,  "required": "EMA50 > EMA200 (long) / EMA50 < EMA200 (short)"},
-                    {"id": "pullback",   "label": "5M Pullback to EMA50","pass": pullback_ok,           "value": pullback_val,   "required": f"Within {pullback_mult}×ATR of EMA50"},
-                    {"id": "rsi",        "label": "5M RSI(14)",          "pass": rsi_ok,                "value": str(m5_rsi) if m5_rsi else "N/A", "required": rsi_req},
-                    {"id": "candle",     "label": "Candle Direction",    "pass": candle_ok,             "value": candle_val,     "required": candle_req},
-                    {"id": "positions",  "label": "Position Limit",      "pass": pos_ok,                "value": pos_val,        "required": f"< {max_pos} concurrent"},
-                ]
+                "conditions": conditions,
             }
 
             self._set_cached('conditions', data)
