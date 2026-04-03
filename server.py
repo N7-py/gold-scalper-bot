@@ -151,6 +151,8 @@ class HealthHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/mode":
             self._handle_set_mode()
+        elif self.path == "/force_trade":
+            self._handle_force_trade()
         else:
             self.send_error(404)
 
@@ -460,6 +462,103 @@ class HealthHandler(BaseHTTPRequestHandler):
 
             self._set_cached('conditions', data)
             self._json_response(200, data)
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _handle_force_trade(self):
+        """
+        POST /force_trade  body: {"side": "long"|"short"}
+        Opens a paper trade at current market price, bypassing strategy conditions.
+        Used to verify the full execution → DB → dashboard pipeline.
+        Only works in paper mode.
+        """
+        bot = self.bot_instance
+        if not bot:
+            self._json_response(503, {"error": "Bot not ready"})
+            return
+        if bot.mode != "paper":
+            self._json_response(400, {"error": "force_trade only allowed in paper mode"})
+            return
+        try:
+            import pandas as pd
+            from utils import calculate_position_size, generate_trade_id, TradeRecord, Position
+            from datetime import datetime, timezone
+
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            side = body.get("side", "long").lower()
+            if side not in ("long", "short"):
+                self._json_response(400, {"error": "side must be 'long' or 'short'"})
+                return
+
+            # Fetch live price + ATR
+            df_5m = bot.exchange.fetch_ohlcv(bot.symbol, '5m', limit=20)
+            if df_5m.empty:
+                self._json_response(503, {"error": "Cannot fetch market data"})
+                return
+            df_5m = bot.strategy.compute_indicators(df_5m)
+            bar = df_5m.iloc[-1]
+            price = float(bar['close'])
+            atr   = float(bar['atr']) if not pd.isna(bar['atr']) else 5.0
+
+            # SL / TP using configured multipliers
+            if side == 'long':
+                sl_price  = round(price - bot.strategy.sl_atr_mult * atr, 2)
+                tp1_price = round(price + bot.strategy.tp1_atr_mult * atr, 2)
+            else:
+                sl_price  = round(price + bot.strategy.short_sl_atr_mult * atr, 2)
+                tp1_price = round(price - bot.strategy.short_tp1_atr_mult * atr, 2)
+
+            balance = bot.exchange.get_balance()
+            qty = calculate_position_size(balance, bot.risk_pct, price, sl_price)
+            if qty <= 0:
+                qty = 0.001  # minimum fallback so the test always works
+
+            trade_id = generate_trade_id(side)
+            now = datetime.now(timezone.utc)
+
+            # Create in-memory position
+            new_pos = Position(
+                trade_id=trade_id,
+                symbol=bot.symbol,
+                side=side,
+                entry_price=price,
+                entry_time=now,
+                quantity=qty,
+                remaining_qty=qty,
+                sl_price=sl_price,
+                tp1_price=tp1_price,
+                atr_at_entry=atr,
+                highest_since_entry=price if side == 'long' else 0,
+                lowest_since_entry=price if side == 'short' else 999999
+            )
+            bot.positions.append(new_pos)
+
+            # Persist to DB
+            record = TradeRecord(
+                trade_id=trade_id,
+                symbol=bot.symbol,
+                side=side,
+                entry_price=price,
+                entry_time=now.isoformat(),
+                quantity=qty,
+                sl_price=sl_price,
+                tp1_price=tp1_price,
+                entry_reason="MANUAL force_trade test",
+                remaining_qty=qty
+            )
+            bot.db.insert_trade(record)
+
+            self._json_response(200, {
+                "ok": True,
+                "trade_id": trade_id,
+                "side": side,
+                "entry_price": price,
+                "sl_price": sl_price,
+                "tp1_price": tp1_price,
+                "quantity": qty,
+                "balance": balance,
+            })
         except Exception as e:
             self._json_response(500, {"error": str(e)})
 

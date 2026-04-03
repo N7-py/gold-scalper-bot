@@ -389,15 +389,11 @@ class CandleStreamer:
         self.max_candles = 500
 
     def _get_ws_urls(self) -> List[str]:
-        """Return a list of WebSocket URLs to try in order."""
-        urls = []
-        # Futures (XAUUSDT is on futures)
-        urls.append(f"wss://fstream.binance.com/ws/{self.symbol}@kline_5m/{self.symbol}@kline_1h")
-        # Spot
-        urls.append(f"wss://stream.binance.com:9443/ws/{self.symbol}@kline_5m/{self.symbol}@kline_1h")
-        if self.testnet:
-            urls.insert(0, f"wss://testnet.binance.vision/ws/{self.symbol}@kline_5m/{self.symbol}@kline_1h")
-        return urls
+        """Return a list of WebSocket URLs to try in order.
+        KuCoin Futures WS requires auth tokens — not implemented, so return empty
+        list to skip straight to REST polling fallback which uses CCXT with creds.
+        """
+        return []
 
     async def start(self):
         """Start streaming — tries WebSocket, falls back to REST polling."""
@@ -453,18 +449,20 @@ class CandleStreamer:
             try:
                 ex = self.exchange_client._get_data_exchange() if self.exchange_client else None
                 if ex is None:
-                    exchange_name = 'binance'
-                    if self.exchange_client and self.exchange_client.config:
-                        exchange_name = self.exchange_client.config.get('exchange', 'name', default='binance').lower()
-                    exchange_class = getattr(ccxt, exchange_name)
-                    ex = exchange_class({'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
+                    self.logger.error("No exchange available for REST polling — cannot fetch candles")
+                    await asyncio.sleep(poll_interval)
+                    continue
 
                 # Fetch latest 5M candles
+                new_5m = False
                 ohlcv_5m = ex.fetch_ohlcv(self.raw_symbol, '5m', limit=5)
                 if ohlcv_5m:
+                    now = pd.Timestamp.now(tz='UTC')
                     for bar in ohlcv_5m:
                         ts = pd.Timestamp(bar[0], unit='ms', tz='UTC')
-                        if last_5m_ts is None or ts > last_5m_ts:
+                        bar_end = ts + pd.Timedelta(minutes=5)
+                        # Only process closed bars we haven't seen yet
+                        if bar_end <= now and (last_5m_ts is None or ts > last_5m_ts):
                             candle = {
                                 'timestamp': ts,
                                 'open': float(bar[1]),
@@ -473,25 +471,25 @@ class CandleStreamer:
                                 'close': float(bar[4]),
                                 'volume': float(bar[5])
                             }
-                            # Only process if this bar is CLOSED (not the current forming bar)
-                            now = pd.Timestamp.now(tz='UTC')
-                            bar_end = ts + pd.Timedelta(minutes=5)
-                            if bar_end <= now:
-                                self.candles_5m.append(candle)
-                                if len(self.candles_5m) > self.max_candles:
-                                    self.candles_5m = self.candles_5m[-self.max_candles:]
-                                last_5m_ts = ts
+                            self.candles_5m.append(candle)
+                            if len(self.candles_5m) > self.max_candles:
+                                self.candles_5m = self.candles_5m[-self.max_candles:]
+                            last_5m_ts = ts
+                            new_5m = True
 
-                    # Trigger callback with updated data
-                    if self.candles_5m:
+                    # Only fire callback when a genuinely new bar arrived
+                    if new_5m and self.candles_5m:
                         await self.on_new_5m_bar(self._to_dataframe(self.candles_5m))
 
                 # Fetch latest 1H candles
+                new_1h = False
                 ohlcv_1h = ex.fetch_ohlcv(self.raw_symbol, '1h', limit=3)
                 if ohlcv_1h:
+                    now = pd.Timestamp.now(tz='UTC')
                     for bar in ohlcv_1h:
                         ts = pd.Timestamp(bar[0], unit='ms', tz='UTC')
-                        if last_1h_ts is None or ts > last_1h_ts:
+                        bar_end = ts + pd.Timedelta(hours=1)
+                        if bar_end <= now and (last_1h_ts is None or ts > last_1h_ts):
                             candle = {
                                 'timestamp': ts,
                                 'open': float(bar[1]),
@@ -500,15 +498,13 @@ class CandleStreamer:
                                 'close': float(bar[4]),
                                 'volume': float(bar[5])
                             }
-                            now = pd.Timestamp.now(tz='UTC')
-                            bar_end = ts + pd.Timedelta(hours=1)
-                            if bar_end <= now:
-                                self.candles_1h.append(candle)
-                                if len(self.candles_1h) > self.max_candles:
-                                    self.candles_1h = self.candles_1h[-self.max_candles:]
-                                last_1h_ts = ts
+                            self.candles_1h.append(candle)
+                            if len(self.candles_1h) > self.max_candles:
+                                self.candles_1h = self.candles_1h[-self.max_candles:]
+                            last_1h_ts = ts
+                            new_1h = True
 
-                    if self.candles_1h:
+                    if new_1h and self.candles_1h:
                         await self.on_new_1h_bar(self._to_dataframe(self.candles_1h))
 
             except Exception as e:

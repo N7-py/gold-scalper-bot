@@ -377,6 +377,11 @@
                 <button class="mode-btn active" id="btn-paper" onclick="setMode('paper')">PAPER</button>
                 <button class="mode-btn"        id="btn-live"  onclick="setMode('live')">LIVE</button>
             </div>
+            <div style="margin-top:10px;display:flex;gap:6px;">
+                <button class="mode-btn" style="background:rgba(0,200,100,0.15);border:1px solid #00c864;color:#00c864;flex:1" onclick="forceTrade('long')">▲ Force LONG</button>
+                <button class="mode-btn" style="background:rgba(255,60,60,0.15);border:1px solid #ff3c3c;color:#ff3c3c;flex:1" onclick="forceTrade('short')">▼ Force SHORT</button>
+            </div>
+            <div id="force-trade-result" style="margin-top:6px;font-size:11px;color:#aaa;word-break:break-all;"></div>
         </div>
 
         <div class="glass-card">
@@ -651,6 +656,26 @@
             const data = await res.json();
             if (!res.ok) alert('Error: ' + (data.error || res.statusText));
         } catch (e) { alert('Request failed: ' + e.message); }
+    }
+
+    async function forceTrade(side) {
+        const el = document.getElementById('force-trade-result');
+        el.textContent = 'Placing ' + side.toUpperCase() + ' trade...';
+        try {
+            const res  = await fetch('/force_trade', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({side}) });
+            const data = await res.json();
+            if (res.ok) {
+                el.style.color = side === 'long' ? '#00c864' : '#ff3c3c';
+                el.textContent = `✓ ${side.toUpperCase()} opened @ ${data.entry_price} | SL ${data.sl_price} | TP1 ${data.tp1_price} | Qty ${data.quantity} | ID: ${data.trade_id}`;
+                fetchTrades();
+            } else {
+                el.style.color = '#ff9900';
+                el.textContent = '✗ ' + (data.error || 'Unknown error');
+            }
+        } catch (e) {
+            el.style.color = '#ff9900';
+            el.textContent = '✗ Request failed: ' + e.message;
+        }
     }
 
     function syncToggle(mode) {
