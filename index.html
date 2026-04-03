@@ -164,16 +164,31 @@
         #btn-paper.active { color: var(--paper-mode); }
 
         /* ── Conditions Panel ───────────────────────────── */
-        .conditions-card {
+        .conditions-wrapper {
             grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+        @media (max-width: 800px) { .conditions-wrapper { grid-template-columns: 1fr; } }
+
+        .conditions-card {
             background: var(--glass-bg);
             border: 1px solid var(--glass-border);
             border-radius: 24px;
-            padding: 1.5rem 2rem;
+            padding: 1.5rem;
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
             box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            position: relative;
+            overflow: hidden;
         }
+        .conditions-card.active-long  { border-color: rgba(0,255,136,0.35); box-shadow: 0 8px 32px rgba(0,255,136,0.08); }
+        .conditions-card.active-short { border-color: rgba(255,51,102,0.35); box-shadow: 0 8px 32px rgba(255,51,102,0.08); }
+        .conditions-card::before { content:''; position:absolute; top:0;left:0;right:0;height:2px; }
+        .conditions-card.long-card::before  { background: linear-gradient(90deg,transparent,rgba(0,255,136,0.6),transparent); }
+        .conditions-card.short-card::before { background: linear-gradient(90deg,transparent,rgba(255,51,102,0.6),transparent); }
+
         .conditions-header {
             display: flex;
             justify-content: space-between;
@@ -182,18 +197,17 @@
             flex-wrap: wrap;
             gap: 0.75rem;
         }
-        .conditions-title-row {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .conditions-title { font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 2px; font-weight: 600; }
+        .conditions-title-row { display: flex; align-items: center; gap: 10px; }
+        .conditions-title { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 2px; font-weight: 800; }
+        .conditions-title.long-title  { color: var(--success); }
+        .conditions-title.short-title { color: var(--danger); }
+
         .bias-pill {
             font-size: 0.7rem; font-weight: 800; letter-spacing: 0.1em;
             padding: 3px 10px; border-radius: 50px; text-transform: uppercase;
         }
-        .bias-long  { background: rgba(0,255,136,0.12); color: var(--success); border: 1px solid rgba(0,255,136,0.25); }
-        .bias-short { background: rgba(255,51,102,0.12); color: var(--danger);  border: 1px solid rgba(255,51,102,0.25); }
+        .bias-long    { background: rgba(0,255,136,0.12); color: var(--success); border: 1px solid rgba(0,255,136,0.25); }
+        .bias-short   { background: rgba(255,51,102,0.12); color: var(--danger);  border: 1px solid rgba(255,51,102,0.25); }
         .bias-neutral { background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--glass-border); }
 
         .signal-badge {
@@ -204,30 +218,38 @@
         .signal-pending { background: rgba(255,51,102,0.1);  color: var(--danger);  border: 1px solid rgba(255,51,102,0.2); }
         .signal-loading { background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--glass-border); }
 
-        .conditions-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-            gap: 0.6rem;
-        }
+        .conditions-grid { display: flex; flex-direction: column; gap: 0.5rem; }
+
         .cond-row {
             display: flex;
             align-items: flex-start;
             gap: 0.75rem;
-            padding: 0.75rem 1rem;
-            border-radius: 12px;
+            padding: 0.65rem 0.9rem;
+            border-radius: 10px;
             background: rgba(255,255,255,0.02);
             border: 1px solid rgba(255,255,255,0.04);
-            transition: border-color 0.3s;
         }
         .cond-row.pass { border-left: 3px solid rgba(0,255,136,0.5); }
         .cond-row.fail { border-left: 3px solid rgba(255,51,102,0.5); }
-        .cond-icon { font-size: 1rem; flex-shrink: 0; margin-top: 2px; }
+        .cond-row.info { border-left: 3px solid rgba(244,208,63,0.4); }
+        .cond-icon { font-size: 0.9rem; flex-shrink: 0; margin-top: 2px; }
         .cond-body { flex: 1; min-width: 0; }
-        .cond-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 3px; }
-        .cond-value { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; font-weight: 700; word-break: break-all; }
+        .cond-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 2px; }
+        .cond-value { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; font-weight: 700; word-break: break-all; }
         .cond-value.pass { color: var(--success); }
         .cond-value.fail { color: var(--danger); }
-        .cond-required { font-size: 0.68rem; color: var(--text-muted); margin-top: 2px; opacity: 0.7; }
+        .cond-value.info { color: var(--accent-gold); }
+        .cond-required { font-size: 0.65rem; color: var(--text-muted); margin-top: 2px; opacity: 0.65; }
+
+        .section-divider {
+            display: flex; align-items: center; gap: 8px;
+            margin: 0.75rem 0 0.5rem;
+            font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em;
+            text-transform: uppercase; color: var(--text-muted); opacity: 0.6;
+        }
+        .section-divider::before, .section-divider::after {
+            content: ''; flex: 1; height: 1px; background: var(--glass-border);
+        }
 
         /* ── Terminal ───────────────────────────────────── */
         .terminal-container {
@@ -326,18 +348,36 @@
             <div class="card-value" id="bot-uptime">0s</div>
         </div>
 
-        <!-- Conditions Checklist -->
-        <div class="conditions-card">
-            <div class="conditions-header">
-                <div class="conditions-title-row">
-                    <div class="conditions-title">Trade Entry Conditions</div>
-                    <span class="bias-pill bias-neutral" id="conditions-bias">NEUTRAL</span>
+        <!-- Strategy Conditions — Long + Short side by side -->
+        <div class="conditions-wrapper">
+
+            <!-- LONG SETUP -->
+            <div class="conditions-card long-card" id="long-card">
+                <div class="conditions-header">
+                    <div class="conditions-title-row">
+                        <div class="conditions-title long-title">▲ Long Setup</div>
+                        <span class="bias-pill bias-neutral" id="conditions-bias">NEUTRAL</span>
+                    </div>
+                    <div class="signal-badge signal-loading" id="long-signal-badge">Scanning...</div>
                 </div>
-                <div class="signal-badge signal-loading" id="signal-badge">Scanning...</div>
+                <div class="conditions-grid" id="long-conditions-list">
+                    <!-- populated by JS -->
+                </div>
             </div>
-            <div class="conditions-grid" id="conditions-list">
-                <!-- populated by JS -->
+
+            <!-- SHORT SETUP -->
+            <div class="conditions-card short-card" id="short-card">
+                <div class="conditions-header">
+                    <div class="conditions-title-row">
+                        <div class="conditions-title short-title">▼ Short Setup</div>
+                    </div>
+                    <div class="signal-badge signal-loading" id="short-signal-badge">Scanning...</div>
+                </div>
+                <div class="conditions-grid" id="short-conditions-list">
+                    <!-- populated by JS -->
+                </div>
             </div>
+
         </div>
 
         <!-- Terminal -->
@@ -403,38 +443,77 @@
         } catch (e) { /* silent */ }
     }
 
-    function renderConditions(data) {
-        // Bias badge (chart toolbar)
-        const biasBadge = document.getElementById('bias-badge');
-        const condBias  = document.getElementById('conditions-bias');
-        const biasClass = data.bias === 'long' ? 'bias-long' : data.bias === 'short' ? 'bias-short' : 'bias-neutral';
-        biasBadge.className = 'bias-pill ' + biasClass;
-        biasBadge.textContent = data.bias.toUpperCase();
-        condBias.className  = 'bias-pill ' + biasClass;
-        condBias.textContent = data.bias.toUpperCase();
+    // IDs of short-specific conditions that get a special "info" style
+    const SHORT_INFO_IDS = new Set(['stochrsi']);
 
-        // Signal badge
-        const signalBadge = document.getElementById('signal-badge');
-        if (data.signal_ready) {
-            signalBadge.className = 'signal-badge signal-ready';
-            signalBadge.textContent = 'SIGNAL READY';
-        } else {
-            signalBadge.className = 'signal-badge signal-pending';
-            signalBadge.textContent = 'NOT READY';
-        }
-
-        // Condition rows
-        const list = document.getElementById('conditions-list');
-        list.innerHTML = data.conditions.map(c => `
-            <div class="cond-row ${c.pass ? 'pass' : 'fail'}">
-                <div class="cond-icon">${c.pass ? '✅' : '❌'}</div>
+    function condRow(c) {
+        const isInfo = SHORT_INFO_IDS.has(c.id);
+        const rowCls  = isInfo ? 'info' : (c.pass ? 'pass' : 'fail');
+        const icon    = isInfo ? '💡' : (c.pass ? '✅' : '❌');
+        const valCls  = isInfo ? 'info' : (c.pass ? 'pass' : 'fail');
+        return `
+            <div class="cond-row ${rowCls}">
+                <div class="cond-icon">${icon}</div>
                 <div class="cond-body">
                     <div class="cond-label">${c.label}</div>
-                    <div class="cond-value ${c.pass ? 'pass' : 'fail'}">${c.value}</div>
+                    <div class="cond-value ${valCls}">${c.value}</div>
                     <div class="cond-required">Required: ${c.required}</div>
                 </div>
-            </div>
-        `).join('');
+            </div>`;
+    }
+
+    function renderConditions(data) {
+        // Bias badge (chart toolbar + long panel)
+        const bias      = data.bias || 'neutral';
+        const biasClass = bias === 'long' ? 'bias-long' : bias === 'short' ? 'bias-short' : 'bias-neutral';
+        const biasText  = bias.toUpperCase();
+
+        document.getElementById('bias-badge').className    = 'bias-pill ' + biasClass;
+        document.getElementById('bias-badge').textContent  = biasText;
+        document.getElementById('conditions-bias').className   = 'bias-pill ' + biasClass;
+        document.getElementById('conditions-bias').textContent = biasText;
+
+        // Active highlight on the correct card
+        const longCard  = document.getElementById('long-card');
+        const shortCard = document.getElementById('short-card');
+        longCard.classList.toggle('active-long',   bias === 'long');
+        shortCard.classList.toggle('active-short',  bias === 'short');
+
+        // Long signal badge
+        const longBadge = document.getElementById('long-signal-badge');
+        if (data.long_signal_ready) {
+            longBadge.className   = 'signal-badge signal-ready';
+            longBadge.textContent = 'SIGNAL READY';
+        } else {
+            longBadge.className   = 'signal-badge signal-pending';
+            longBadge.textContent = 'NOT READY';
+        }
+
+        // Short signal badge
+        const shortBadge = document.getElementById('short-signal-badge');
+        if (data.short_signal_ready) {
+            shortBadge.className   = 'signal-badge signal-ready';
+            shortBadge.textContent = 'SIGNAL READY';
+        } else {
+            shortBadge.className   = 'signal-badge signal-pending';
+            shortBadge.textContent = 'NOT READY';
+        }
+
+        // Long conditions list
+        const longList = document.getElementById('long-conditions-list');
+        longList.innerHTML = (data.long_conditions || data.conditions || []).map(condRow).join('');
+
+        // Short conditions list — insert a divider before the enhanced conditions
+        const shortConds = data.short_conditions || data.conditions || [];
+        const baseIds    = new Set(['session','atr','h1_bias','h1_cross','pullback','rsi','candle','positions']);
+        const baseConds  = shortConds.filter(c => baseIds.has(c.id));
+        const extraConds = shortConds.filter(c => !baseIds.has(c.id));
+        const shortList  = document.getElementById('short-conditions-list');
+        shortList.innerHTML =
+            baseConds.map(condRow).join('') +
+            (extraConds.length
+                ? `<div class="section-divider">Enhanced Short Filters</div>` + extraConds.map(condRow).join('')
+                : '');
     }
 
     // ── Status fetch ─────────────────────────────────────────

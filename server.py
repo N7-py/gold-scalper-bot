@@ -366,100 +366,90 @@ class HealthHandler(BaseHTTPRequestHandler):
             atr_ok  = atr is not None and atr >= min_atr
             atr_val = f"{atr} (min {min_atr})" if atr else "N/A"
 
-            # ── Pullback ──
+            # ── Shared values ──
+            bullish       = price > m5_open
+            n_pos         = len(bot.positions)
+            max_pos       = bot.max_positions
+            pos_ok        = n_pos < max_pos
+            pos_val       = f"{n_pos} / {max_pos} open"
             pullback_dist = round(abs(price - m5_ema50), 2) if m5_ema50 else None
-            if bias == "long":
-                pullback_ok = m5_ema50 is not None and pullback_zone is not None and price >= m5_ema50 and pullback_dist <= pullback_zone
-            elif bias == "short":
-                pullback_ok = m5_ema50 is not None and pullback_zone is not None and price <= m5_ema50 and pullback_dist <= pullback_zone
-            else:
-                pullback_ok = False
-            pullback_val = f"Dist {pullback_dist} (zone ≤ {pullback_zone})" if pullback_dist is not None else "N/A"
+            pullback_val  = f"Dist {pullback_dist} (zone ≤ {pullback_zone})" if pullback_dist is not None else "N/A"
+            macd_ok       = macd_hist is not None and macd_hist < 0
+            macd_val      = f"{macd_hist}" if macd_hist is not None else "N/A"
+            rsi_val       = str(m5_rsi) if m5_rsi else "N/A"
+            stochrsi_val  = str(stochrsi_k) if stochrsi_k is not None else "N/A"
+            rsi_br_val    = (f"10-bar max={rsi_br_value} (need <{rsi_br_max})"
+                             if rsi_br_value is not None else "N/A")
 
-            # ── RSI ──
-            if bias == "long":
-                rsi_ok  = m5_rsi is not None and m5_rsi > 50
-                rsi_req = "> 50 for long"
-            elif bias == "short":
-                rsi_ok  = m5_rsi is not None and m5_rsi < 50
-                rsi_req = "< 50 for short"
-            else:
-                rsi_ok  = False
-                rsi_req = "> 50 (long) / < 50 (short)"
+            # ── LONG conditions (evaluated independently) ──
+            long_pullback_ok = (m5_ema50 is not None and pullback_zone is not None
+                                and price >= m5_ema50 and pullback_dist <= pullback_zone)
+            long_rsi_ok      = m5_rsi is not None and m5_rsi > 50
+            long_candle_ok   = bullish
+            long_candle_val  = (f"Bullish — C {price} > O {m5_open}" if bullish
+                                else f"Bearish — C {price} < O {m5_open}")
+            long_h1_val      = (f"UP — Close {h1_close} > EMA200 {h1_ema200}" if uptrend
+                                else f"NOT UP — Close {h1_close} / EMA200 {h1_ema200}")
+            long_cross_val   = (f"EMA50 {h1_ema50} > EMA200 {h1_ema200}" if h1_ema50 and h1_ema200
+                                else "N/A")
+            long_signal_ready = all([session_ok, atr_ok, uptrend,
+                                     long_pullback_ok, long_rsi_ok, long_candle_ok, pos_ok])
 
-            # ── Candle direction ──
-            bullish = price > m5_open
-            if bias == "long":
-                candle_ok  = bullish
-                candle_val = f"Bullish — C {price} > O {m5_open}" if bullish else f"Bearish — C {price} < O {m5_open}"
-                candle_req = "Bullish close"
-            elif bias == "short":
-                candle_ok  = not bullish
-                candle_val = f"Bearish — C {price} < O {m5_open}" if not bullish else f"Bullish — C {price} > O {m5_open}"
-                candle_req = "Bearish close"
-            else:
-                candle_ok  = False
-                candle_val = f"C {price} / O {m5_open}"
-                candle_req = "Bullish (long) / Bearish (short)"
-
-            # ── Positions ──
-            n_pos    = len(bot.positions)
-            max_pos  = bot.max_positions
-            pos_ok   = n_pos < max_pos
-            pos_val  = f"{n_pos} / {max_pos} open"
-
-            # Short-specific conditions
-            macd_ok  = macd_hist is not None and macd_hist < 0
-            macd_val = f"{macd_hist}" if macd_hist is not None else "N/A"
-
-            if bias == "short":
-                signal_ready = all([session_ok, atr_ok, downtrend,
-                                    pullback_ok, rsi_ok, candle_ok, pos_ok,
-                                    rsi_br_ok, macd_ok])
-            else:
-                signal_ready = all([session_ok, atr_ok, uptrend or downtrend,
-                                    pullback_ok, rsi_ok, candle_ok, pos_ok])
-
-            conditions = [
-                {"id": "session",    "label": "Trading Session",     "pass": session_ok,           "value": session_val,    "required": "London 8–12 / NY 13–17 UTC"},
-                {"id": "atr",        "label": "ATR Filter (5M)",     "pass": atr_ok,               "value": atr_val,        "required": f"≥ {min_atr}"},
-                {"id": "h1_bias",    "label": "1H Trend Bias",       "pass": uptrend or downtrend, "value": h1_bias_val,    "required": "Close > EMA200 & EMA50 > EMA200 (or inverse)"},
-                {"id": "h1_cross",   "label": "1H EMA50 vs EMA200",  "pass": uptrend or downtrend, "value": ema_cross_val,  "required": "EMA50 > EMA200 (long) / EMA50 < EMA200 (short)"},
-                {"id": "pullback",   "label": "5M Pullback to EMA50","pass": pullback_ok,           "value": pullback_val,   "required": f"Within {pullback_mult}×ATR of EMA50"},
-                {"id": "rsi",        "label": "5M RSI(14)",           "pass": rsi_ok,               "value": str(m5_rsi) if m5_rsi else "N/A", "required": rsi_req},
-                {"id": "candle",     "label": "Candle Direction",     "pass": candle_ok,            "value": candle_val,     "required": candle_req},
-                {"id": "positions",  "label": "Position Limit",       "pass": pos_ok,               "value": pos_val,        "required": f"< {max_pos} concurrent"},
+            long_conditions = [
+                {"id": "session",   "label": "Trading Session",      "pass": session_ok,       "value": session_val,    "required": "London 8–12 / NY 13–17 UTC"},
+                {"id": "atr",       "label": "ATR Filter (5M)",      "pass": atr_ok,           "value": atr_val,        "required": f"≥ {min_atr}"},
+                {"id": "h1_bias",   "label": "1H Trend Bias",        "pass": uptrend,          "value": long_h1_val,    "required": "Close > EMA200 (bullish structure)"},
+                {"id": "h1_cross",  "label": "1H EMA50 vs EMA200",   "pass": uptrend,          "value": long_cross_val, "required": "EMA50 > EMA200 (golden cross)"},
+                {"id": "pullback",  "label": "5M Pullback to EMA50", "pass": long_pullback_ok, "value": pullback_val,   "required": f"Price ≥ EMA50, within {pullback_mult}×ATR"},
+                {"id": "rsi",       "label": "5M RSI(14)",            "pass": long_rsi_ok,      "value": rsi_val,        "required": "> 50 (bullish momentum)"},
+                {"id": "candle",    "label": "Candle Direction",      "pass": long_candle_ok,   "value": long_candle_val,"required": "Bullish close (Close > Open)"},
+                {"id": "positions", "label": "Position Limit",        "pass": pos_ok,           "value": pos_val,        "required": f"< {max_pos} concurrent"},
             ]
 
-            # Append short-specific conditions when bias is short (or neutral for visibility)
-            if bias in ("short", "neutral"):
-                rsi_br_val = (f"10-bar max RSI={rsi_br_value} (need <{rsi_br_max})"
-                              if rsi_br_value is not None else "N/A")
-                conditions.append({
-                    "id": "rsi_bear_range", "label": "RSI Bear Range (10-bar)",
-                    "pass": rsi_br_ok, "value": rsi_br_val,
-                    "required": f"RSI 10-bar max < {rsi_br_max} (no hidden bullish momentum)"
-                })
-                conditions.append({
-                    "id": "macd_short", "label": "MACD(8,17,9) Histogram",
-                    "pass": macd_ok, "value": macd_val,
-                    "required": "< 0 (bearish momentum confirmed)"
-                })
-                stochrsi_note = f"{stochrsi_k}" if stochrsi_k is not None else "N/A"
-                conditions.append({
-                    "id": "stochrsi", "label": "StochRSI(14) K — informational",
-                    "pass": stochrsi_k is not None and stochrsi_k > 60,
-                    "value": stochrsi_note,
-                    "required": ">60 at entry (not a hard gate — unreliable in strong trends)"
-                })
+            # ── SHORT conditions (evaluated independently, includes enhanced filters) ──
+            short_pullback_ok = (m5_ema50 is not None and pullback_zone is not None
+                                 and price <= m5_ema50 and pullback_dist <= pullback_zone)
+            short_rsi_ok      = m5_rsi is not None and m5_rsi < 50
+            short_candle_ok   = not bullish
+            short_candle_val  = (f"Bearish — C {price} < O {m5_open}" if not bullish
+                                 else f"Bullish — C {price} > O {m5_open}")
+            short_h1_val      = (f"DOWN — Close {h1_close} < EMA200 {h1_ema200}" if downtrend
+                                 else f"NOT DOWN — Close {h1_close} / EMA200 {h1_ema200}")
+            short_cross_val   = (f"EMA50 {h1_ema50} < EMA200 {h1_ema200}" if h1_ema50 and h1_ema200
+                                 else "N/A")
+            short_signal_ready = all([session_ok, atr_ok, downtrend,
+                                      short_pullback_ok, short_rsi_ok, short_candle_ok,
+                                      pos_ok, rsi_br_ok, macd_ok])
+
+            short_conditions = [
+                {"id": "session",        "label": "Trading Session",          "pass": session_ok,        "value": session_val,    "required": "London 8–12 / NY 13–17 UTC"},
+                {"id": "atr",            "label": "ATR Filter (5M)",          "pass": atr_ok,            "value": atr_val,        "required": f"≥ {min_atr}"},
+                {"id": "h1_bias",        "label": "1H Trend Bias",            "pass": downtrend,         "value": short_h1_val,   "required": "Close < EMA200 (bearish structure)"},
+                {"id": "h1_cross",       "label": "1H EMA50 vs EMA200",       "pass": downtrend,         "value": short_cross_val,"required": "EMA50 < EMA200 (death cross)"},
+                {"id": "pullback",       "label": "5M Pullback to EMA50",     "pass": short_pullback_ok, "value": pullback_val,   "required": f"Price ≤ EMA50, within {pullback_mult}×ATR"},
+                {"id": "rsi",            "label": "5M RSI(14)",                "pass": short_rsi_ok,      "value": rsi_val,        "required": "< 50 (bearish momentum)"},
+                {"id": "candle",         "label": "Candle Direction",          "pass": short_candle_ok,   "value": short_candle_val,"required": "Bearish close (Close < Open)"},
+                {"id": "positions",      "label": "Position Limit",            "pass": pos_ok,            "value": pos_val,        "required": f"< {max_pos} concurrent"},
+                {"id": "rsi_bear_range", "label": "RSI Bear Range (10-bar)",  "pass": rsi_br_ok,         "value": rsi_br_val,     "required": f"10-bar RSI max < {rsi_br_max} (no hidden bullish momentum)"},
+                {"id": "macd",           "label": "MACD(8,17,9) Histogram",   "pass": macd_ok,           "value": macd_val,       "required": "< 0 (bearish momentum confirmed)"},
+                {"id": "stochrsi",       "label": "StochRSI K (info only)",   "pass": stochrsi_k is not None and stochrsi_k > 60, "value": stochrsi_val, "required": "> 60 at entry (informational — not a hard gate)"},
+            ]
+
+            # Legacy flat list kept for backward compat
+            signal_ready = short_signal_ready if bias == "short" else long_signal_ready
+            bias_conditions = short_conditions if bias == "short" else long_conditions
 
             data = {
-                "symbol": symbol,
-                "timestamp": utc_now.isoformat(),
-                "price": price,
-                "bias": bias,
-                "signal_ready": signal_ready,
-                "conditions": conditions,
+                "symbol":             symbol,
+                "timestamp":          utc_now.isoformat(),
+                "price":              price,
+                "bias":               bias,
+                "signal_ready":       signal_ready,
+                "long_signal_ready":  long_signal_ready,
+                "short_signal_ready": short_signal_ready,
+                "long_conditions":    long_conditions,
+                "short_conditions":   short_conditions,
+                "conditions":         bias_conditions,
             }
 
             self._set_cached('conditions', data)
