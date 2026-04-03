@@ -32,3 +32,6 @@ data/
 # Generated
 equity_curve.png
 backtest_trades.csv
+
+# Secrets — never commit real API keys
+config.json
