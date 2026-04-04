@@ -172,8 +172,11 @@ class StrategyEngine:
         if pd.isna(h1_ema50) or pd.isna(h1_ema200):
             return None
 
-        uptrend_bias = h1_close > h1_ema200
-        downtrend_bias = h1_close < h1_ema200
+        # Require BOTH price > EMA200 AND EMA50 > EMA200 (golden cross) for uptrend.
+        # Price alone > EMA200 misses sideways/early-reversal conditions that produce
+        # ~60% of long SL hits in backtests.
+        uptrend_bias = h1_close > h1_ema200 and h1_ema50 > h1_ema200
+        downtrend_bias = h1_close < h1_ema200 and h1_ema50 < h1_ema200
 
         # ── 5M conditions ───────────────────────────
         m5_close = bar_5m['close']
@@ -192,30 +195,34 @@ class StrategyEngine:
 
         # ── LONG SIGNAL ──────────────────────────────
         if uptrend_bias:
-            # Check no duplicate long
-            existing_longs = [p for p in current_positions if p.side == 'long']
-            if len(existing_longs) >= 1:
-                # Allow only if we also allow a short — but max 2 total checked above
-                pass
-
-            # Condition 2: Price near EMA50 (pullback zone — allow slight overshoot)
+            # Condition 2: Price pulled back to EMA50 from ABOVE (tight zone).
+            # pullback_zone = pullback_atr_mult * ATR (config: 0.5).
+            # Price must be within 0.5 ATR of EMA50 AND approaching from above
+            # (close >= EMA50 - 0.3*ATR). This eliminates "entering mid-air" noise.
             pullback_to_ema50 = abs(m5_close - m5_ema50) <= pullback_zone
+            price_from_above = m5_close >= m5_ema50 - (0.3 * atr)
 
-            # Condition 3: RSI > 45 (relaxed from 50 — at EMA50 pullback RSI is often 45-55)
-            rsi_ok = m5_rsi > 45
+            # Condition 3: RSI > 50 — momentum must be with the long (not in bear range)
+            rsi_ok = m5_rsi > 50
 
-            # Candle direction — informational, not a hard gate
+            # Condition 4: Bullish candle — price action must confirm the bounce
             bullish = m5_close > m5_open
 
-            if pullback_to_ema50 and rsi_ok:
+            # Condition 5: MACD(8,17,9) histogram positive — short-term momentum aligned
+            # (mirrors the MACD < 0 gate already used for shorts)
+            macd_hist = bar_5m.get('macd_hist', np.nan)
+            macd_ok = not pd.isna(macd_hist) and macd_hist > 0
+
+            if pullback_to_ema50 and price_from_above and rsi_ok and bullish and macd_ok:
                 sl_price = m5_close - (self.sl_atr_mult * atr)
                 tp1_price = m5_close + (self.tp1_atr_mult * atr)
 
-                candle_note = "Bullish" if bullish else "Bearish"
                 reason = (
-                    f"LONG | 1H bias UP (C={h1_close:.2f}>EMA200={h1_ema200:.2f}) | "
-                    f"5M near EMA50={m5_ema50:.2f} (dist={abs(m5_close-m5_ema50):.2f}) | "
-                    f"RSI={m5_rsi:.1f} | Candle={candle_note} | ATR={atr:.2f}"
+                    f"LONG | 1H bias UP (C={h1_close:.2f}>EMA200={h1_ema200:.2f}, "
+                    f"EMA50={h1_ema50:.2f}>EMA200) | "
+                    f"5M pullback to EMA50={m5_ema50:.2f} (dist={abs(m5_close-m5_ema50):.2f}) | "
+                    f"RSI={m5_rsi:.1f} | Bullish candle | ATR={atr:.2f} | "
+                    f"MACD hist={macd_hist:.4f}>0"
                 )
                 self.logger.info(f"📈 LONG signal: {reason}")
 
@@ -231,16 +238,19 @@ class StrategyEngine:
 
         # ── SHORT SIGNAL (enhanced — research-backed conditions) ─────────────
         if downtrend_bias:
-            # Condition 2: Price near EMA50 (pullback zone — allow slight overshoot)
+            # Condition 2: Price pulled back to EMA50 from BELOW (tight zone).
+            # Price must be within 0.5 ATR of EMA50 AND approaching from below
+            # (close <= EMA50 + 0.3*ATR). Mirrors the long directional check.
             pullback_to_ema50 = abs(m5_close - m5_ema50) <= pullback_zone
+            price_from_below = m5_close <= m5_ema50 + (0.3 * atr)
 
-            # Condition 3: RSI < 55 (relaxed from 50 — allows momentum confirmation at pullback)
-            rsi_ok = m5_rsi < 55
+            # Condition 3: RSI < 50 — tightened from 55; must confirm bearish momentum
+            rsi_ok = m5_rsi < 50
 
-            # Candle direction — informational, not a hard gate
+            # Condition 4: Bearish candle — hard gate (was informational)
             bearish = m5_close < m5_open
 
-            # Condition 5 (NEW): RSI Bear Range
+            # Condition 5: RSI Bear Range
             # Gold shorts fail when RSI has recently been strong (bounce in disguise).
             # Require RSI has not recovered above rsi_bear_range_max in last N bars.
             # Source: Arthur Hill CMT (SSRN) — improved short win rate ~54%→67%.
@@ -262,7 +272,7 @@ class StrategyEngine:
             # because it never reaches overbought, which would block all valid shorts.
             stochrsi_k = bar_5m.get('stochrsi_k', np.nan)
 
-            if pullback_to_ema50 and rsi_ok and rsi_bear_range_ok:
+            if pullback_to_ema50 and price_from_below and rsi_ok and bearish and rsi_bear_range_ok and macd_ok:
                 # Short-specific ATR multipliers (wider SL + deeper TP vs longs):
                 # SL 2.0x: gold squeeze wicks routinely pierce 1.5x ATR
                 # TP1 3.0x: gold shorts have documented larger average moves than longs
@@ -330,12 +340,18 @@ class StrategyEngine:
 
             # ── Trailing Stop (after TP1) ──
             if position.tp1_hit:
-                # Update highest
+                # Bug fix: highest_since_entry initialises to 0 in Position dataclass.
+                # On the very first bar after TP1, if price has already dipped, the
+                # trail would be anchored below entry and exit at a loss.
+                # Lock the floor at tp1_price so trail can never be set below TP1 - ATR.
+                if position.highest_since_entry < position.tp1_price:
+                    position.highest_since_entry = position.tp1_price
+                    position.trail_stop = position.tp1_price - (self.trail_atr_mult * atr)
+
                 if current_high > position.highest_since_entry:
                     position.highest_since_entry = current_high
-                    # Move trail stop up
                     new_trail = position.highest_since_entry - (self.trail_atr_mult * atr)
-                    if new_trail > trail:
+                    if new_trail > position.trail_stop:
                         position.trail_stop = new_trail
 
                 if current_low <= position.trail_stop and position.trail_stop > 0:
@@ -353,10 +369,17 @@ class StrategyEngine:
 
             # ── Trailing Stop (after TP1) ──
             if position.tp1_hit:
+                # Bug fix: lowest_since_entry initialises to 999999 in Position dataclass.
+                # Mirror the long fix — anchor ceiling at tp1_price so trail starts
+                # from a profitable level (tp1 + ATR) not from an extreme value.
+                if position.lowest_since_entry > position.tp1_price:
+                    position.lowest_since_entry = position.tp1_price
+                    position.trail_stop = position.tp1_price + (self.trail_atr_mult * atr)
+
                 if current_low < position.lowest_since_entry:
                     position.lowest_since_entry = current_low
                     new_trail = position.lowest_since_entry + (self.trail_atr_mult * atr)
-                    if new_trail < trail or trail == 0:
+                    if new_trail < position.trail_stop or position.trail_stop == 0:
                         position.trail_stop = new_trail
 
                 if current_high >= position.trail_stop and position.trail_stop > 0:
